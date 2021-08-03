@@ -1,0 +1,12 @@
+# hardhat
+artifacts
+build
+cache
+logs
+typechain
+
+# dotenv
+.env
+
+# node
+node_modules
