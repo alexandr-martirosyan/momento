@@ -1,21 +1,20 @@
-// SPDX-License-Identifier: Unlicensed
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 
 import "./interfaces/IUniswapV2Router02.sol";
 import "./interfaces/IUniswapV2Factory.sol";
 
-contract Momento is IERC20, Ownable {
+contract Momento is IERC20Metadata, Ownable {
     struct User {
         uint256 buy;
         uint256 sell;
     }
 
-    address public marketingAddress = payable(0xCfc5835d709A837d7445C0a881c293fF58309d5a);
-    address public teamAddress = payable(0x857ed7E7b4C40F29CB7391FCF88EAc76BD284032);
-    address public constant stakingAddress = payable(0xad11F3c07aa816e36de174eB53F6603FB62eDA18);
+    address public marketingAddress = 0x07c013fba1bB7CA3a3eb1dc0666De5bB0bF8D7d9;
+    address public teamAddress = 0x6aEC062a363e4cFCC6A369Df2981Dc66cf4Bb8Ed;
     address public constant deadAddress = 0x000000000000000000000000000000000000dEaD;
 
     uint256 private _rTeamLock;
@@ -25,7 +24,9 @@ contract Momento is IERC20, Ownable {
     uint256 private _rTeamUnlockTokenCount;
 
     uint256 private _rBurnLock;
-    uint256 private _tBurnLock;
+
+    uint256 private _rBuyBackTokenCount;
+    uint256 private _buyBackETHCount;
 
     mapping(address => User) private _cooldown;
 
@@ -33,7 +34,7 @@ contract Momento is IERC20, Ownable {
     mapping (address => uint256) private _tOwned;
     mapping (address => mapping (address => uint256)) private _allowances;
 
-    mapping (address => bool) private _isExcludedFromFee;
+    mapping (address => bool) private _isUniswapV2Pair;
 
     mapping (address => bool) private _isExcluded;
     address[] private _excluded;
@@ -48,12 +49,11 @@ contract Momento is IERC20, Ownable {
 
     string private _name = "Momento";
     string private _symbol = "MOMENTO";
-    uint8 private _decimals = 9;
     
-    uint256 public _taxFee = 5;
+    uint256 public _taxFee = 4;
     uint256 private _previousTaxFee = _taxFee;
     
-    uint256 public _liquidityFee = 5;
+    uint256 public _liquidityFee = 3;
     uint256 private _previousLiquidityFee = _liquidityFee;
 
     uint256 public _marketingFee = 1;
@@ -63,7 +63,7 @@ contract Momento is IERC20, Ownable {
     uint256 private _previousBuyBackFee = _buyBackFee;
 
     IUniswapV2Router02 public immutable uniswapV2Router;
-    address public immutable uniswapV2Pair;
+    address public uniswapV2Pair;
     
     bool inSwapAndLiquify;
     bool public swapAndLiquifyEnabled = true;
@@ -92,11 +92,8 @@ contract Momento is IERC20, Ownable {
         _rOwned[_msgSender()] = onePercentR * 60;
         // add 5% of tokens to marketing address
         _rOwned[marketingAddress] = onePercentR * 5;
-        // add 12% of tokens to staking address
-        _rOwned[stakingAddress] = onePercentR * 12;
         // lock 10% of tokens for burning further
         _rBurnLock = onePercentR * 10;
-        _tBurnLock = onePercentT * 10;
         // lock 3% of tokens for team for 6 months and vested over 18 months
         _rTeamLock = onePercentR * 3;
 
@@ -104,9 +101,9 @@ contract Momento is IERC20, Ownable {
 
         teamUnlockTime = block.timestamp + 180 days;
 
-        // burning 10% of totalsupply
-        _rTotal = onePercentR * 90;
-        _tTotal = onePercentT * 90;
+        // burning 22% of totalsupply
+        _rTotal = onePercentR * 78;
+        _tTotal = onePercentT * 78;
 
 
         IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
@@ -115,15 +112,14 @@ contract Momento is IERC20, Ownable {
 
         // set the rest of the contract variables
         uniswapV2Router = _uniswapV2Router;
+
+        _holderCount = 3;
         
-        // exclude owner and this contract from fee
-        _isExcludedFromFee[owner()] = true;
-        _isExcludedFromFee[address(this)] = true;
+        _isUniswapV2Pair[uniswapV2Pair] = true;
 
         emit Transfer(address(0), _msgSender(), onePercentT * 60);
         emit Transfer(address(0), marketingAddress, onePercentT * 5);
-        emit Transfer(address(0), stakingAddress, onePercentT * 12);
-        emit Transfer(deadAddress, address(0), onePercentT * 10);
+        emit Transfer(deadAddress, address(0), onePercentT * 22);
     }
 
     function unlockTeam() public {
@@ -150,31 +146,29 @@ contract Momento is IERC20, Ownable {
     }
 
     function _burnTenPercent() private {
-        if (_tBurnLock != 0) {
-            uint256 tBurnCount = _tBurnLock / 10;
+        if (_rBurnLock != 0) {
             uint256 rBurnCount = _rBurnLock / 10;
-            if (tBurnCount == 0) {
-                tBurnCount = _tBurnLock;
+            if (rBurnCount == 0) {
                 rBurnCount = _rBurnLock;
             }
-            _tBurnLock -= tBurnCount;
             _rBurnLock -= rBurnCount;
+            uint256 tBurnCount = tokenFromReflection(rBurnCount);
             _tTotal -= tBurnCount;
             _rTotal -= rBurnCount;
             emit Transfer(deadAddress, address(0), tBurnCount);
         }
     }
 
-    function name() public view returns (string memory) {
+    function name() public view override returns (string memory) {
         return _name;
     }
 
-    function symbol() public view returns (string memory) {
+    function symbol() public view override returns (string memory) {
         return _symbol;
     }
 
-    function decimals() public view returns (uint8) {
-        return _decimals;
+    function decimals() public pure override returns (uint8) {
+        return 9;
     }
 
     function totalSupply() public view override returns (uint256) {
@@ -227,20 +221,20 @@ contract Momento is IERC20, Ownable {
     function deliver(uint256 tAmount) public {
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
-        (uint256 rAmount,,,,,,,) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _rTotal = _rTotal - rAmount;
-        _tFeeTotal = _tFeeTotal + tAmount;
+        uint256 rAmount = tAmount * _getRate();
+        _rOwned[sender] -= rAmount;
+        _rTotal -= rAmount;
+        _tFeeTotal += tAmount;
     }
 
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
         require(tAmount <= _tTotal, "Amount must be less than supply");
+        uint256 currentRate = _getRate();
         if (!deductTransferFee) {
-            (uint256 rAmount,,,,,,,) = _getValues(tAmount);
-            return rAmount;
+            return tAmount * currentRate;
         } else {
-            (,uint256 rTransferAmount,,,,,,) = _getValues(tAmount);
-            return rTransferAmount;
+            uint256[5] memory tValues = _getTValues(tAmount);
+            return tValues[0] * currentRate;
         }
     }
 
@@ -253,6 +247,8 @@ contract Momento is IERC20, Ownable {
     function excludeFromReward(address account) public onlyOwner() {
         // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Uniswap router.');
         require(!_isExcluded[account], "Account is already excluded");
+        require(account != marketingAddress, "marketingAddress cannot be excluded");
+        require(account != deadAddress, "deadAddress cannot be excluded");
         if(_rOwned[account] > 0) {
             _tOwned[account] = tokenFromReflection(_rOwned[account]);
         }
@@ -273,25 +269,12 @@ contract Momento is IERC20, Ownable {
         }
     }
 
-    function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 rMarketing, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tBuyBack) = _getValues(tAmount);
-        _tOwned[sender] -= tAmount;
-        _rOwned[sender] -= rAmount;
-        _tOwned[recipient] += tTransferAmount;
-        _rOwned[recipient] += rTransferAmount;        
-        _rOwned[marketingAddress] += rMarketing;
-        _tOwned[deadAddress] += tBuyBack;
-        _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
-        emit Transfer(sender, recipient, tTransferAmount);
+    function addUniswapV2PairAddress(address account) public onlyOwner {
+        _isUniswapV2Pair[account] = true;
     }
     
-    function excludeFromFee(address account) public onlyOwner {
-        _isExcludedFromFee[account] = true;
-    }
-    
-    function includeInFee(address account) public onlyOwner {
-        _isExcludedFromFee[account] = false;
+    function removeUniswapV2PairAddress(address account) public onlyOwner {
+        _isUniswapV2Pair[account] = false;
     }
     
     function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
@@ -301,7 +284,7 @@ contract Momento is IERC20, Ownable {
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
         _liquidityFee = liquidityFee;
     }
-   
+
     function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
         _maxTxAmount = _tTotal * maxTxPercent / 100;
     }
@@ -312,40 +295,21 @@ contract Momento is IERC20, Ownable {
     }
     
     //to recieve ETH from uniswapV2Router when swaping
-    receive() external payable {
-    }
+    receive() external payable {}
 
-    function _reflectFee(uint256 rFee, uint256 tFee) private {
-        _rTotal = _rTotal - rFee;
-        _tFeeTotal = _tFeeTotal + tFee;
-    }
-
-    function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256, uint256, uint256) {
-        uint256[5] memory tValues = _getTValues(tAmount);
-        uint256[4] memory rValues = _getRValues(tAmount, tValues[0], tValues[1], tValues[2], tValues[3], _getRate());
-
-        return (rValues[0], rValues[3], rValues[1], rValues[2], tValues[4], tValues[0], tValues[1], tValues[3]);
+    function _reflectFee(uint256 tFee, uint256 rFee) private {
+        _rTotal -= rFee;
+        _tFeeTotal += tFee;
     }
 
     function _getTValues(uint256 tAmount) private view returns (uint256[5] memory) {
         uint256[5] memory tValues;
-        tValues[0] = calculateTaxFee(tAmount); // tFee
-        tValues[1] = calculateLiquidityFee(tAmount); // tLiquidity
-        tValues[2] = calculateMarketingFee(tAmount); // tMarketing
-        tValues[3] = calculateBuyBackFee(tAmount); // tBuyBack
-        tValues[4] = tAmount - tValues[0] - tValues[1] - tValues[2] - tValues[3]; // tTrasnferAmount
+        tValues[1] = calculateTaxFee(tAmount); // tFee
+        tValues[2] = calculateLiquidityFee(tAmount); // tLiquidity
+        tValues[3] = calculateMarketingFee(tAmount); // tMarketing
+        tValues[4] = calculateBuyBackFee(tAmount); // tBuyBack
+        tValues[0] = tAmount - tValues[1] - tValues[2] - tValues[3] - tValues[4]; // tTrasnferAmount
         return tValues;
-    }
-
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 tMarketing, uint256 tBuyBack, uint256 currentRate) private pure returns (uint256[4] memory) {
-        uint256[4] memory rValues;
-        uint256 rLiquidity = tLiquidity * currentRate;
-        uint256 rBuyBack = tBuyBack * currentRate;
-        rValues[0] = tAmount * currentRate; // rAmount
-        rValues[1] = tFee * currentRate; // rFee
-        rValues[2] = tMarketing * currentRate; // rMarketing
-        rValues[3] = rValues[0] - rValues[1] - rLiquidity - rValues[2] - rBuyBack; // rTransferAmount
-        return rValues;
     }
 
     function _getRate() private view returns(uint256) {
@@ -358,19 +322,17 @@ contract Momento is IERC20, Ownable {
         uint256 tSupply = _tTotal;
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_rOwned[_excluded[i]] > rSupply || _tOwned[_excluded[i]] > tSupply) return (_rTotal, _tTotal);
-            rSupply = rSupply - _rOwned[_excluded[i]];
-            tSupply = tSupply - _tOwned[_excluded[i]];
+            rSupply -= _rOwned[_excluded[i]];
+            tSupply -= _tOwned[_excluded[i]];
         }
         if (rSupply < _rTotal / _tTotal) return (_rTotal, _tTotal);
         return (rSupply, tSupply);
     }
     
-    function _takeLiquidity(uint256 tLiquidity) private {
-        uint256 currentRate =  _getRate();
-        uint256 rLiquidity = tLiquidity * currentRate;
-        _rOwned[address(this)] = _rOwned[address(this)] + rLiquidity;
+    function _takeLiquidity(uint256 tLiquidity, uint256 rLiquidity) private {
+        _rOwned[address(this)] += rLiquidity;
         if(_isExcluded[address(this)]) {
-            _tOwned[address(this)] = _tOwned[address(this)] + tLiquidity;
+            _tOwned[address(this)] += tLiquidity;
         }
     }
     
@@ -411,8 +373,8 @@ contract Momento is IERC20, Ownable {
         _buyBackFee = _previousBuyBackFee;
     }
     
-    function isExcludedFromFee(address account) public view returns(bool) {
-        return _isExcludedFromFee[account];
+    function isUniswapV2PairAddress(address account) public view returns(bool) {
+        return _isUniswapV2Pair[account];
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
@@ -428,18 +390,14 @@ contract Momento is IERC20, Ownable {
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
         if(from != owner() && to != owner()) {
-            if (from != address(this) && to != address(this)) {
-                uint256 timestamp = block.timestamp;
-                require(_cooldown[from].sell < timestamp, "You can transfer tokens once in 15 seconds");
-                require(_cooldown[to].buy < timestamp, "You can transfer tokens once in 15 seconds");
-                _cooldown[from].sell = timestamp + 30;
-                _cooldown[to].buy = timestamp + 30;
-            }
             require(amount <= _maxTxAmount, "Transfer amount exceeds the maxTxAmount.");
         }
 
 
+        // if balance of recipient is 0 then holder count is increased
+        // and if sender balance is equal to amount then holder count decreased
         if (balanceOf(to) == 0) _holderCount++;
+        if (balanceOf(from) == amount) _holderCount--;
 
         // is the token balance of this contract address over the min number of
         // tokens that we need to initiate a swap + liquidity lock?
@@ -447,7 +405,7 @@ contract Momento is IERC20, Ownable {
         // also, don't swap & liquify if sender is uniswap pair.
         uint256 contractTokenBalance = balanceOf(address(this));
         
-        if(contractTokenBalance >= _maxTxAmount) {
+        if (contractTokenBalance >= _maxTxAmount) {
             contractTokenBalance = _maxTxAmount;
         }
         
@@ -455,7 +413,7 @@ contract Momento is IERC20, Ownable {
         if (
             overMinTokenBalance &&
             !inSwapAndLiquify &&
-            from != uniswapV2Pair &&
+            !_isUniswapV2Pair[from] &&
             swapAndLiquifyEnabled
         ) {
             contractTokenBalance = numTokensSellToAddToLiquidity;
@@ -463,25 +421,49 @@ contract Momento is IERC20, Ownable {
             swapAndLiquify(contractTokenBalance);
         }
         
-        //indicates if fee should be deducted from transfer
-        bool takeFee = true;
+        // indicates if fee should be deducted from transfer
+        bool takeFee;
         
-        //if any account belongs to _isExcludedFromFee account then remove the fee
-        if(_isExcludedFromFee[from] || _isExcludedFromFee[to]) {
+        // take fee only in buying or selling operation
+        if (from != address(this) && to != address(this)) {
+            // buy
+            if (_isUniswapV2Pair[from] && to != address(uniswapV2Router)) {
+                takeFee = true;
+                uint256 timestamp = block.timestamp;
+                require(_cooldown[from].buy < timestamp, "You can transfer tokens once in 15 seconds");
+                _cooldown[from].buy = timestamp + 30;
+            } 
+            // sell 
+            else {
+                // if holderCount increases by 100 then 10% of 
+                // burnlock tokens burned
+                if (_holderCount > _lastMaxHolderCount) {
+                    _burnTenPercent();
+                    _lastMaxHolderCount += 100;
+                }
+                if (_isUniswapV2Pair[to]) {
+                    takeFee = true;
+                    // if ETH from buy back is more or equal than 0.2 ether
+                    // then we buyBack tokens and burn
+                    if (_buyBackETHCount >= 0.2 ether) {
+                        _buyBackAndBurn(_buyBackETHCount);
+                        _buyBackETHCount = 0;
+                    }
+                    uint256 timestamp = block.timestamp;
+                    require(_cooldown[to].sell < timestamp, "You can transfer tokens once in 15 seconds");
+                    _cooldown[to].sell = timestamp + 30;
+                }
+            }
+        }
+
+        // if sender is owner or recipient is owner or recipient is deadAddress
+        // then fee does not taken
+        if (from == owner() || to == owner() || to == deadAddress) {
             takeFee = false;
         }
         
-        //transfer amount, it will take tax, burn, liquidity fee
-        _tokenTransfer(from,to,amount,takeFee);
-
-        if (balanceOf(from) == 0) _holderCount--;
-        if (_holderCount > _lastMaxHolderCount) {
-            _burnTenPercent();
-            _lastMaxHolderCount += 100;
-        }
-        if (address(this).balance >= 0.2 ether) {
-            _buyBackAndBurn(address(this).balance);
-        }
+        // transfer amount, it will take tax, burn, liquidity, marketing fee
+        _tokenTransfer(from, to, amount, takeFee);
     }
 
     function _buyBackAndBurn(uint256 amount) private lockTheSwap {
@@ -567,58 +549,48 @@ contract Momento is IERC20, Ownable {
     }
 
     //this method is responsible for taking all fee, if takeFee is true
-    function _tokenTransfer(address sender, address recipient, uint256 amount, bool takeFee) private {
+    function _tokenTransfer(address sender, address recipient, uint256 tAmount, bool takeFee) private {
         if(!takeFee) {
             removeAllFee();
         }
-        
-        if (_isExcluded[sender] && !_isExcluded[recipient]) {
-            _transferFromExcluded(sender, recipient, amount);
-        } else if (!_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferToExcluded(sender, recipient, amount);
-        } else if (_isExcluded[sender] && _isExcluded[recipient]) {
-            _transferBothExcluded(sender, recipient, amount);
-        } else {
-            _transferStandard(sender, recipient, amount);
+
+        // tValues[0] -> tTransferAmount -> transfer amount
+        // tValues[1] -> tFee -> holders fee amount
+        // tValues[2] -> tLiquidity -> liquidity fee amount
+        // tValues[3] -> tMarketing -> marketing fee amount
+        // tValues[4] -> tBuyBack -> buyBack fee amount
+        uint256[5] memory tValues = _getTValues(tAmount);
+        uint256 currentRate = _getRate();
+        if (takeFee) {
+            _rBuyBackTokenCount += (tValues[4] * currentRate);
+            if (!_isUniswapV2Pair[sender] && _rBuyBackTokenCount > 0) {
+                uint256 _tBuyBackTokenCount = _rBuyBackTokenCount / currentRate;
+                address contractAddress = address(this);
+                _rOwned[contractAddress] += _rBuyBackTokenCount;
+                emit Transfer(sender, contractAddress, _tBuyBackTokenCount);
+                uint256 balanceBefore = contractAddress.balance;
+                swapTokensForEth(_tBuyBackTokenCount);
+                uint256 balanceAfter = contractAddress.balance;
+                _buyBackETHCount += balanceAfter - balanceBefore;
+                _rBuyBackTokenCount = 0;
+            }
+            _rOwned[marketingAddress] += (tValues[3] * currentRate);
+            _takeLiquidity(tValues[2], tValues[2] * currentRate);
+            _reflectFee(tValues[1], tValues[1] * currentRate);
+            emit Transfer(sender, marketingAddress, tValues[3]);
         }
+        _rOwned[sender] -= (tAmount * currentRate);
+        _rOwned[recipient] += (tValues[0] * currentRate);
+        if (_isExcluded[sender]) {
+            _tOwned[sender] -= tAmount;
+        }
+        if (_isExcluded[recipient]) {
+            _tOwned[recipient] += tValues[0];
+        }
+        emit Transfer(sender, recipient, tValues[0]);
         
         if(!takeFee) {
             restoreAllFee();
         }
-    }
-
-    function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 rMarketing, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tBuyBack) = _getValues(tAmount);
-        _rOwned[sender] -= rAmount;
-        _rOwned[recipient] += rTransferAmount;
-        _rOwned[marketingAddress] += rMarketing;
-        _tOwned[deadAddress] += tBuyBack;
-        _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
-        emit Transfer(sender, recipient, tTransferAmount);
-    }
-
-    function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 rMarketing, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tBuyBack) = _getValues(tAmount);
-        _rOwned[sender] -= rAmount;
-        _tOwned[recipient] += tTransferAmount;
-        _rOwned[recipient] += rTransferAmount;
-        _rOwned[marketingAddress] += rMarketing;
-        _tOwned[deadAddress] += tBuyBack;
-        _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
-        emit Transfer(sender, recipient, tTransferAmount);
-    }
-
-    function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 rMarketing, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity, uint256 tBuyBack) = _getValues(tAmount);
-        _tOwned[sender] -= tAmount;
-        _rOwned[sender] -= rAmount;
-        _rOwned[recipient] += rTransferAmount;   
-        _rOwned[marketingAddress] += rMarketing;
-        _tOwned[deadAddress] += tBuyBack;
-        _takeLiquidity(tLiquidity);
-        _reflectFee(rFee, tFee);
-        emit Transfer(sender, recipient, tTransferAmount);
     }
 }

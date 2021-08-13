@@ -10,21 +10,21 @@
    50% Supply is burned at start.
  */
 
-// SPDX-License-Identifier: Unlicensed
+// SPDX-License-Identifier: MIT
 pragma solidity ^0.8.4;
 
-import "./interfaces/IERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
+
 import "./interfaces/IUniswapV2Router02.sol";
 import "./interfaces/IUniswapV2Factory.sol";
 
-import "./utils/Context.sol";
-import "./utils/Ownable.sol";
-
-import "./libraries/Address.sol";
-
-import "hardhat/console.sol";
 
 contract SafeMoon is Context, IERC20, Ownable {
+    using SafeMath for uint256;
     using Address for address;
 
     mapping (address => uint256) private _rOwned;
@@ -71,11 +71,9 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
     
     constructor() {
-        _rOwned[0xFFcf8FDEE72ac11b5c542428B35EEF5769C409f0] = _rTotal / 10;
-        _rOwned[_msgSender()] = _rTotal - _rTotal / 10;
+        _rOwned[_msgSender()] = _rTotal;
         
-        // IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F);
-        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
+        IUniswapV2Router02 _uniswapV2Router = IUniswapV2Router02(0x05fF2B0DB69458A0750badebc4f9e13aDd608C7F);
         // Create a uniswap pair for this new token
         uniswapV2Pair = IUniswapV2Factory(_uniswapV2Router.factory()).createPair(address(this), _uniswapV2Router.WETH());
 
@@ -85,98 +83,79 @@ contract SafeMoon is Context, IERC20, Ownable {
         //exclude owner and this contract from fee
         _isExcludedFromFee[owner()] = true;
         _isExcludedFromFee[address(this)] = true;
-
-        console.log("Max is     ->", MAX);
-        console.log("R total is ->", _rTotal);
-        console.log("T total is ->", _tTotal);
         
         emit Transfer(address(0), _msgSender(), _tTotal);
     }
 
     function name() public view returns (string memory) {
-        console.log('Calling name function');
         return _name;
     }
 
     function symbol() public view returns (string memory) {
-        console.log('Calling symbol function');
         return _symbol;
     }
 
     function decimals() public view returns (uint8) {
-        console.log('Calling decimals function');
         return _decimals;
     }
 
     function totalSupply() public view override returns (uint256) {
-        console.log('Calling totalSupply function');
         return _tTotal;
     }
 
     function balanceOf(address account) public view override returns (uint256) {
-        console.log('Calling balanceOf function');
         if (_isExcluded[account]) return _tOwned[account];
         return tokenFromReflection(_rOwned[account]);
     }
 
     function transfer(address recipient, uint256 amount) public override returns (bool) {
-        console.log('Calling transfer function');
         _transfer(_msgSender(), recipient, amount);
         return true;
     }
 
     function allowance(address owner, address spender) public view override returns (uint256) {
-        console.log('Calling allowance function');
         return _allowances[owner][spender];
     }
 
     function approve(address spender, uint256 amount) public override returns (bool) {
-        console.log('Calling approve function');
         _approve(_msgSender(), spender, amount);
         return true;
     }
 
     function transferFrom(address sender, address recipient, uint256 amount) public override returns (bool) {
-        console.log('Calling transferFrom function');
         _transfer(sender, recipient, amount);
-        _approve(sender, _msgSender(), _allowances[sender][_msgSender()] - amount);
+        _approve(sender, _msgSender(), _allowances[sender][_msgSender()].sub(amount, "ERC20: transfer amount exceeds allowance"));
         return true;
     }
 
     function increaseAllowance(address spender, uint256 addedValue) public virtual returns (bool) {
-        console.log('Calling increaseAllowance function');
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender] + addedValue);
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].add(addedValue));
         return true;
     }
 
     function decreaseAllowance(address spender, uint256 subtractedValue) public virtual returns (bool) {
-        console.log('Calling decreaseAllowance function');
-        _approve(_msgSender(), spender, _allowances[_msgSender()][spender] - subtractedValue);
+        _approve(_msgSender(), spender, _allowances[_msgSender()][spender].sub(subtractedValue, "ERC20: decreased allowance below zero"));
         return true;
     }
 
     function isExcludedFromReward(address account) public view returns (bool) {
-        console.log('Calling isExcludedFromReward function');
         return _isExcluded[account];
     }
 
     function totalFees() public view returns (uint256) {
-        console.log('Calling totalFees function');
         return _tFeeTotal;
     }
 
     function deliver(uint256 tAmount) public {
-        console.log('Calling deliver function');
         address sender = _msgSender();
         require(!_isExcluded[sender], "Excluded addresses cannot call this function");
         (uint256 rAmount,,,,,) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _rTotal = _rTotal - rAmount;
-        _tFeeTotal = _tFeeTotal + tAmount;
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rTotal = _rTotal.sub(rAmount);
+        _tFeeTotal = _tFeeTotal.add(tAmount);
     }
 
     function reflectionFromToken(uint256 tAmount, bool deductTransferFee) public view returns(uint256) {
-        console.log('Calling reflectionFromToken function');
         require(tAmount <= _tTotal, "Amount must be less than supply");
         if (!deductTransferFee) {
             (uint256 rAmount,,,,,) = _getValues(tAmount);
@@ -188,14 +167,12 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function tokenFromReflection(uint256 rAmount) public view returns(uint256) {
-        console.log('Calling tokenFromReflection function');
         require(rAmount <= _rTotal, "Amount must be less than total reflections");
         uint256 currentRate = _getRate();
-        return rAmount / currentRate;
+        return rAmount.div(currentRate);
     }
 
     function excludeFromReward(address account) public onlyOwner() {
-        console.log('Calling excludeFromReward function');
         // require(account != 0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D, 'We can not exclude Uniswap router.');
         require(!_isExcluded[account], "Account is already excluded");
         if(_rOwned[account] > 0) {
@@ -206,7 +183,6 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function includeInReward(address account) external onlyOwner() {
-        console.log('Calling includeInReward function');
         require(_isExcluded[account], "Account is already excluded");
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_excluded[i] == account) {
@@ -220,124 +196,107 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function _transferBothExcluded(address sender, address recipient, uint256 tAmount) private {
-        console.log('Calling _transferBothExcluded function');
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _tOwned[sender] = _tOwned[sender] - tAmount;
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _tOwned[recipient] = _tOwned[recipient] + tTransferAmount;
-        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;        
+        _tOwned[sender] = _tOwned[sender].sub(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);        
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
     
     function excludeFromFee(address account) public onlyOwner {
-        console.log('Calling excludeFromFee function');
         _isExcludedFromFee[account] = true;
     }
     
     function includeInFee(address account) public onlyOwner {
-        console.log('Calling includeInFee function');
         _isExcludedFromFee[account] = false;
     }
     
     function setTaxFeePercent(uint256 taxFee) external onlyOwner() {
-        console.log('Calling setTaxFeePercent function');
         _taxFee = taxFee;
     }
     
     function setLiquidityFeePercent(uint256 liquidityFee) external onlyOwner() {
-        console.log('Calling setLiquidityFeePercent function');
         _liquidityFee = liquidityFee;
     }
    
     function setMaxTxPercent(uint256 maxTxPercent) external onlyOwner() {
-        console.log('Calling setMaxTxPercent function');
-        _maxTxAmount = _tTotal * maxTxPercent / 100;
+        _maxTxAmount = _tTotal.mul(maxTxPercent).div(
+            10**2
+        );
     }
 
     function setSwapAndLiquifyEnabled(bool _enabled) public onlyOwner {
-        console.log('Calling setSwapAndLiquifyEnabled function');
         swapAndLiquifyEnabled = _enabled;
         emit SwapAndLiquifyEnabledUpdated(_enabled);
     }
     
-    //to recieve ETH from uniswapV2Router when swaping
-    receive() external payable {
-        console.log('Calling receive function with %d Wei', msg.value);
-    }
+     //to recieve ETH from uniswapV2Router when swaping
+    receive() external payable {}
 
     function _reflectFee(uint256 rFee, uint256 tFee) private {
-        console.log('Calling _reflectFee function');
-        _rTotal = _rTotal - rFee;
-        _tFeeTotal = _tFeeTotal + tFee;
+        _rTotal = _rTotal.sub(rFee);
+        _tFeeTotal = _tFeeTotal.add(tFee);
     }
 
     function _getValues(uint256 tAmount) private view returns (uint256, uint256, uint256, uint256, uint256, uint256) {
-        console.log('Calling _getValues function');
         (uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getTValues(tAmount);
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee) = _getRValues(tAmount, tFee, tLiquidity, _getRate());
         return (rAmount, rTransferAmount, rFee, tTransferAmount, tFee, tLiquidity);
     }
 
     function _getTValues(uint256 tAmount) private view returns (uint256, uint256, uint256) {
-        console.log('Calling _getTValues function');
         uint256 tFee = calculateTaxFee(tAmount);
         uint256 tLiquidity = calculateLiquidityFee(tAmount);
-        uint256 tTransferAmount = tAmount - tFee - tLiquidity;
+        uint256 tTransferAmount = tAmount.sub(tFee).sub(tLiquidity);
         return (tTransferAmount, tFee, tLiquidity);
     }
 
-    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 currentRate) private view returns (uint256, uint256, uint256) {
-        console.log('Calling _getRValues function');
-        uint256 rAmount = tAmount * currentRate;
-        uint256 rFee = tFee * currentRate;
-        uint256 rLiquidity = tLiquidity * currentRate;
-        uint256 rTransferAmount = rAmount - rFee - rLiquidity;
+    function _getRValues(uint256 tAmount, uint256 tFee, uint256 tLiquidity, uint256 currentRate) private pure returns (uint256, uint256, uint256) {
+        uint256 rAmount = tAmount.mul(currentRate);
+        uint256 rFee = tFee.mul(currentRate);
+        uint256 rLiquidity = tLiquidity.mul(currentRate);
+        uint256 rTransferAmount = rAmount.sub(rFee).sub(rLiquidity);
         return (rAmount, rTransferAmount, rFee);
     }
 
     function _getRate() private view returns(uint256) {
-        console.log('Calling _getRate function');
         (uint256 rSupply, uint256 tSupply) = _getCurrentSupply();
-        return rSupply / tSupply;
+        return rSupply.div(tSupply);
     }
 
     function _getCurrentSupply() private view returns(uint256, uint256) {
-        console.log('Calling _getCurrentSupply function');
         uint256 rSupply = _rTotal;
         uint256 tSupply = _tTotal;
         for (uint256 i = 0; i < _excluded.length; i++) {
             if (_rOwned[_excluded[i]] > rSupply || _tOwned[_excluded[i]] > tSupply) return (_rTotal, _tTotal);
-            rSupply = rSupply - _rOwned[_excluded[i]];
-            tSupply = tSupply - _tOwned[_excluded[i]];
+            rSupply = rSupply.sub(_rOwned[_excluded[i]]);
+            tSupply = tSupply.sub(_tOwned[_excluded[i]]);
         }
-        if (rSupply < _rTotal / _tTotal) return (_rTotal, _tTotal);
+        if (rSupply < _rTotal.div(_tTotal)) return (_rTotal, _tTotal);
         return (rSupply, tSupply);
     }
     
     function _takeLiquidity(uint256 tLiquidity) private {
-        console.log('Calling _takeLiquidity function');
         uint256 currentRate =  _getRate();
-        uint256 rLiquidity = tLiquidity * currentRate;
-        _rOwned[address(this)] = _rOwned[address(this)] + rLiquidity;
+        uint256 rLiquidity = tLiquidity.mul(currentRate);
+        _rOwned[address(this)] = _rOwned[address(this)].add(rLiquidity);
         if(_isExcluded[address(this)]) {
-            _tOwned[address(this)] = _tOwned[address(this)] + tLiquidity;
+            _tOwned[address(this)] = _tOwned[address(this)].add(tLiquidity);
         }
     }
     
     function calculateTaxFee(uint256 _amount) private view returns (uint256) {
-        console.log('Calling calculateTaxFee function');
-        return _amount * _taxFee / 100;
+        return _amount.mul(_taxFee).div(100);
     }
 
     function calculateLiquidityFee(uint256 _amount) private view returns (uint256) {
-        console.log('Calling calculateLiquidityFee function');
-        return _amount * _liquidityFee / 100;
+        return _amount.mul(_liquidityFee).div(100);
     }
     
     function removeAllFee() private {
-        console.log('Calling removeAllFee function');
         if(_taxFee == 0 && _liquidityFee == 0) return;
         
         _previousTaxFee = _taxFee;
@@ -348,18 +307,15 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
     
     function restoreAllFee() private {
-        console.log('Calling restoreAllFee function');
         _taxFee = _previousTaxFee;
         _liquidityFee = _previousLiquidityFee;
     }
     
     function isExcludedFromFee(address account) public view returns(bool) {
-        console.log('Calling isExcludedFromFee function');
         return _isExcludedFromFee[account];
     }
 
     function _approve(address owner, address spender, uint256 amount) private {
-        console.log('Calling _approve function');
         require(owner != address(0), "ERC20: approve from the zero address");
         require(spender != address(0), "ERC20: approve to the zero address");
 
@@ -368,7 +324,6 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function _transfer(address from, address to, uint256 amount) private {
-        console.log('Calling _transfer function');
         require(from != address(0), "ERC20: transfer from the zero address");
         require(to != address(0), "ERC20: transfer to the zero address");
         require(amount > 0, "Transfer amount must be greater than zero");
@@ -411,10 +366,9 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function swapAndLiquify(uint256 contractTokenBalance) private lockTheSwap {
-        console.log('Calling swapAndLiquify function');
         // split the contract balance into halves
-        uint256 half = contractTokenBalance / 2;
-        uint256 otherHalf = contractTokenBalance - half;
+        uint256 half = contractTokenBalance.div(2);
+        uint256 otherHalf = contractTokenBalance.sub(half);
 
         // capture the contract's current ETH balance.
         // this is so that we can capture exactly the amount of ETH that the
@@ -426,7 +380,7 @@ contract SafeMoon is Context, IERC20, Ownable {
         swapTokensForEth(half); // <- this breaks the ETH -> HATE swap when swap+liquify is triggered
 
         // how much ETH did we just swap into?
-        uint256 newBalance = address(this).balance - initialBalance;
+        uint256 newBalance = address(this).balance.sub(initialBalance);
 
         // add liquidity to uniswap
         addLiquidity(otherHalf, newBalance);
@@ -435,7 +389,6 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function swapTokensForEth(uint256 tokenAmount) private {
-        console.log('Calling swapTokensForEth function');
         // generate the uniswap pair path of token -> weth
         address[] memory path = new address[](2);
         path[0] = address(this);
@@ -454,7 +407,6 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function addLiquidity(uint256 tokenAmount, uint256 ethAmount) private {
-        console.log('Calling addLiquidity function');
         // approve token transfer to cover all possible scenarios
         _approve(address(this), address(uniswapV2Router), tokenAmount);
 
@@ -470,8 +422,7 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     //this method is responsible for taking all fee, if takeFee is true
-    function _tokenTransfer(address sender, address recipient, uint256 amount, bool takeFee) private {
-        console.log('Calling _tokenTransfer function');
+    function _tokenTransfer(address sender, address recipient, uint256 amount,bool takeFee) private {
         if(!takeFee) {
             removeAllFee();
         }
@@ -494,32 +445,29 @@ contract SafeMoon is Context, IERC20, Ownable {
     }
 
     function _transferStandard(address sender, address recipient, uint256 tAmount) private {
-        console.log('Calling _transferStandard function');
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferToExcluded(address sender, address recipient, uint256 tAmount) private {
-        console.log('Calling _transferToExcluded function');
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _tOwned[recipient] = _tOwned[recipient] + tTransferAmount;
-        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _tOwned[recipient] = _tOwned[recipient].add(tTransferAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
     }
 
     function _transferFromExcluded(address sender, address recipient, uint256 tAmount) private {
-        console.log('Calling _transferFromExcluded function');
         (uint256 rAmount, uint256 rTransferAmount, uint256 rFee, uint256 tTransferAmount, uint256 tFee, uint256 tLiquidity) = _getValues(tAmount);
-        _tOwned[sender] = _tOwned[sender] - tAmount;
-        _rOwned[sender] = _rOwned[sender] - rAmount;
-        _rOwned[recipient] = _rOwned[recipient] + rTransferAmount;   
+        _tOwned[sender] = _tOwned[sender].sub(tAmount);
+        _rOwned[sender] = _rOwned[sender].sub(rAmount);
+        _rOwned[recipient] = _rOwned[recipient].add(rTransferAmount);   
         _takeLiquidity(tLiquidity);
         _reflectFee(rFee, tFee);
         emit Transfer(sender, recipient, tTransferAmount);
